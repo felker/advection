@@ -5,3 +5,4 @@ stream3= radial stream from inner annulus
 stream4= clockwise+radial stream
 stream5= 0 BCs, blob in center of domain moves clockwise
 stream6= 0 BCs, blob in center of domain moves clockwise. Full circle, 200x200
+stream7= 200x200 massive beam moves diagonally to lower right corner through annulus hole

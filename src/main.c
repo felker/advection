@@ -36,11 +36,11 @@ float find_max(float a[], int n);
 
 int main(int argc, char **argv){
   int i,j,k,n; 
-  int nsteps=200;
+  int nsteps=500;
   double dt =0.01;
   
   /* Computational (2D polar) grid coordinates */
-  int nx1 = 200;
+  int nx1 = 100;
   int nx2 = 200;
 
   //number of ghost cells on both sides of each dimension
@@ -144,7 +144,6 @@ int main(int argc, char **argv){
     for(j=js; j<=je; j++){
       x_b[i][j] = X_physical(x1_b[i],x2_b[j]); 
       y_b[i][j] = Y_physical(x1_b[i],x2_b[j]); 
-      //      printf("%lf %lf\n",x[i][j],y[i][j]);
     }
   }
 
@@ -198,20 +197,12 @@ int main(int argc, char **argv){
 		stream_function(X_physical(x1[i]-dx1/2,x2[j]-dx2/2),Y_physical(x1[i]-dx1/2,x2[j]-dx2/2)))/(dx2);
       V[i][j]= -(stream_function(X_physical(x1[i]+dx1/2,x2[j]-dx2/2),Y_physical(x1[i]+dx1/2,x2[j]-dx2/2)) - 
 		 stream_function(X_physical(x1[i]-dx1/2,x2[j]-dx2/2),Y_physical(x1[i]-dx1/2,x2[j]-dx2/2)))/dx1;
-      /* if (i==24){
-	printf("i=%d j=%d U,V = %lf,%lf\n",i,j,U[i][j],V[i][j]); 
-	//printf("r[i] = %lf, phi[j] = %lf\n",x1[i],x2[j]);
-	printf("top corner (x,y)_cartesian = (%lf,%lf)\n",X_physical(x1[i]-dx1/2,x2[j]+dx2/2),Y_physical(x1[i]-dx1/2,x2[j]+dx2/2));  
-	printf("bottom corner (x,y)_cartesian = (%lf,%lf)\n",X_physical(x1[i]-dx1/2,x2[j]-dx2/2),Y_physical(x1[i]-dx1/2,x2[j]-dx2/2));  
-	printf("right corner (x,y)_cartesian = (%lf,%lf)\n",X_physical(x1[i]+dx1/2,x2[j]-dx2/2),Y_physical(x1[i]+dx1/2,x2[j]-dx2/2)); } */
     }
     j=je;
     U[i][j]= (stream_function(X_physical(x1[i]-dx1/2,x2[j-1]+3*dx2/2),Y_physical(x1[i]-dx1/2,x2[j-1]+3*dx2/2)) - 
 	      stream_function(X_physical(x1[i]-dx1/2,x2[j-1]+dx2/2),Y_physical(x1[i]-dx1/2,x2[j-1]+dx2/2)))/(dx2);
     V[i][j]= -(stream_function(X_physical(x1[i]+dx1/2,x2[j-1]+dx2/2),Y_physical(x1[i]+dx1/2,x2[j-1]+dx2/2)) - 
-	      stream_function(X_physical(x1[i]-dx1/2,x2[j-1]+dx2/2),Y_physical(x1[i]-dx1/2,x2[j-1]+dx2/2)))/dx1;
-    /*      if (i==24){
-	    printf("i=%d j=%d U,V = %lf,%lf\n",i,j,U[i][j],V[i][j]); } */
+	       stream_function(X_physical(x1[i]-dx1/2,x2[j-1]+dx2/2),Y_physical(x1[i]-dx1/2,x2[j-1]+dx2/2)))/dx1;
   }
   i=ie;
   for(j=js; j<je; j++){
@@ -301,21 +292,17 @@ int main(int argc, char **argv){
     for(k=0;k<num_ghost; k++){
       for (j=js; j<je; j++){
 	Q[k][j] = bc_x1i(x[is][j],y[is][j]);
-	Q[nx1-num_ghost][j] = bc_x1f(x[is][j],y[is][j]);
-	/* printf("Q[%d][%d] = %lf\n",k,j,Q[k][j]);
-	   printf("Q[%d][%d] = %lf\n",nx1-num_ghost,j,Q[nx1-num_ghost][j]); */
+	Q[nx1-1-k][j] = bc_x1f(x[ie-1][j],y[ie-1][j]);
       }
       for (i=is; i<ie; i++){
 	if(X2_PERIODIC){
 	  Q[i][k] = Q[i][je-1];
-	  Q[i][nx2-num_ghost] = Q[i][js];
+	  Q[i][nx2-1-k] = Q[i][js];
 	}
 	else{
 	Q[i][k] = bc_x2i(x[i][js],y[i][js]);
-	Q[i][nx2-num_ghost] = bc_x2f(x[i][je],y[i][je]);
+	Q[i][nx2-1-k] = bc_x2f(x[i][je-1],y[i][je-1]);
 	}
-	/*	printf("Q[%d][%d] = %lf\n",i,k,Q[i][k]);
-		printf("Q[%d][%d] = %lf\n",i,nx2-num_ghost,Q[i][nx2-num_ghost]);*/
       }
     }
 
@@ -330,10 +317,6 @@ int main(int argc, char **argv){
 	V_plus = fmax(V[i][j],0.0); // max{V_{i,j-1/2},0.0} LHS boundary
 	V_minus = fmin(V[i][j+1],0.0); // min{V_{i,j+1/2},0.0} RHS boundary
 	net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*(V_plus*(Q[i][j] - Q[i][j-1]) + V_minus*(Q[i][j+1] - Q[i][j])); //dividing by kappa in ghost cell....
-	/*	if (j==je-1 && i ==24){
-	 printf("i= %d j=%d, V[i][j] = %lf V[i][j+1] = %lf\n",i,j,V[i][j],V[i][j+1]); 
-	 printf("Q_{j-1} = %lf Q = %lf Q_{j+1} = %lf\n",Q[i][j-1],Q[i][j],Q[i][j+1]);
-	 printf("v+ = %lf v-= %lf net_flux = %lf\n",V_plus,V_minus,net_fluctuation[i][j]);} */
       }
     }
 
@@ -352,8 +335,6 @@ int main(int argc, char **argv){
 	  //index =(j-num_ghost)*nx2_r + (i-num_ghost); 
 	  realQ[index] = (float) Q[i][j]; 
 	  index++;
-	  //if (Q[i][j] != 0.0)
-	    //	    printf("%lf\n",realQ[(j-num_ghost)*nx2_r + (i-num_ghost)]); 
 	}
       }
     }
@@ -378,17 +359,19 @@ double Y_physical(double x1, double x2){
 /*Stream function in physical coordinates */
 double stream_function(double x, double y){
   //  return(y); //stream1: velocity is moving in the y-direction
+  return(x+y); //stream diagonally to the bottom right
   double radius = sqrt(x*x + y*y); 
   double phi = atan2(y,x); 
-  return(radius);  //stream2: velocity is moving clockwise
+  //  return(radius);  //stream2: velocity is moving clockwise
+  //  return(-phi); //stream3: radially inward velocity
   //  return(phi); //stream3: radially outward velocity
   //  return(phi+radius); 
 }
 
 double initial_condition(double x, double y){
-  if ((x>1.0) && (x<1.5) && (y>1.0) && (y<1.5)){
+  /*    if ((x<-1.0) && (x>=-1.5) && (y>1.0) && (y<1.5)){
     return(1.0);
-  }
+    }  */
   return(0.0);
 }
 
@@ -401,6 +384,9 @@ double bc_x1i(double x, double y){
 }
 //bc at outermost radius
 double bc_x1f(double x, double y){
+  if ((x<-0.5) && (x>=-2.5) && (y>0.5) && (y<=2.5)){
+    return(1.0);
+  }
   return(0.0);
 }
 //bc at phi=0.0
