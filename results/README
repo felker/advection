@@ -1,0 +1,6 @@
+this directory contains subdirectories with solutions for different stream functions, BCs and ICs
+stream1= example from leveque chapter 23: streaming in x direction
+stream2= clockwise stream
+stream3= radial stream from inner annulus
+stream4= clockwise+radial stream
+stream5= 0 BCs, blob in center of domain moves clockwise
