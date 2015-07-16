@@ -28,7 +28,7 @@ double X_physical(double, double);
 double Y_physical(double, double);
 double initial_condition(double x, double y);
 double bc_x1i(double x, double y);
-double bc_x1f(double x, double y);
+double bc_x1f(double x, double y,double t);
 double bc_x2i(double x, double y);
 double bc_x2f(double x, double y);
 
@@ -36,12 +36,12 @@ float find_max(float a[], int n);
 
 int main(int argc, char **argv){
   int i,j,k,n; 
-  int nsteps=500;
+  int nsteps=800;
   double dt =0.01;
   
   /* Computational (2D polar) grid coordinates */
   int nx1 = 100;
-  int nx2 = 200;
+  int nx2 = 100;
 
   //number of ghost cells on both sides of each dimension
   //only need 1 for piecewise constant method
@@ -84,6 +84,8 @@ int main(int argc, char **argv){
   double dx1 = lx1/(nx1_r-1);   
   double x1_f = x1_i + lx1;
 
+  //  printf("dx1=%lf dx2=%lf \n",dx1,dx2); 
+  
   /*Cell centered (zonal) values of computational coordinate position */
   double *x1 = (double *) malloc(sizeof(double)*nx1); 
   double *x2 = (double *) malloc(sizeof(double)*nx2);
@@ -158,8 +160,10 @@ int main(int argc, char **argv){
   }
   
   for(i=is; i<ie; i++)
-    for(j=js; j<je; j++)
+    for(j=js; j<je; j++){
       kappa[i][j] = x1[i]*dx1*dx2/(dx1*dx2); // C_ij/(dx1*dx2)???
+      // printf("k[i][j] = %lf\n",dt/(kappa[i][j]*dx1));
+    }
   
   /* Stream function */ //probably dont need this array
   //this variable is cell centered stream 
@@ -197,6 +201,8 @@ int main(int argc, char **argv){
 		stream_function(X_physical(x1[i]-dx1/2,x2[j]-dx2/2),Y_physical(x1[i]-dx1/2,x2[j]-dx2/2)))/(dx2);
       V[i][j]= -(stream_function(X_physical(x1[i]+dx1/2,x2[j]-dx2/2),Y_physical(x1[i]+dx1/2,x2[j]-dx2/2)) - 
 		 stream_function(X_physical(x1[i]-dx1/2,x2[j]-dx2/2),Y_physical(x1[i]-dx1/2,x2[j]-dx2/2)))/dx1;
+      //      if(j==10)
+      //printf("U[%d] = %lf\n",i,U[i][j]);
     }
     j=je;
     U[i][j]= (stream_function(X_physical(x1[i]-dx1/2,x2[j-1]+3*dx2/2),Y_physical(x1[i]-dx1/2,x2[j-1]+3*dx2/2)) - 
@@ -292,7 +298,7 @@ int main(int argc, char **argv){
     for(k=0;k<num_ghost; k++){
       for (j=js; j<je; j++){
 	Q[k][j] = bc_x1i(x[is][j],y[is][j]);
-	Q[nx1-1-k][j] = bc_x1f(x[ie-1][j],y[ie-1][j]);
+	Q[nx1-1-k][j] = bc_x1f(x[ie-1][j],y[ie-1][j],(n+1)*dt);
       }
       for (i=is; i<ie; i++){
 	if(X2_PERIODIC){
@@ -313,6 +319,7 @@ int main(int argc, char **argv){
 	U_plus = fmax(U[i][j],0.0); // max{U_{i-1/2,j},0.0} LHS boundary
 	U_minus = fmin(U[i+1][j],0.0); // min{U_{i+1/2,j},0.0} RHS boundary
 	net_fluctuation[i][j] = dt/(kappa[i][j]*dx1)*(U_plus*(Q[i][j] - Q[i-1][j]) + U_minus*(Q[i+1][j] - Q[i][j]));
+	//net_fluctuation[i][j] = dt/(kappa[i][j]*dx1)*(x1_b[i]*U_plus*(Q[i][j] - Q[i-1][j]) + U_minus*(x1_b[i+1]*Q[i+1][j] - x1[i]*Q[i][j]));
 	/* Fluctuations in second coordinate */
 	V_plus = fmax(V[i][j],0.0); // max{V_{i,j-1/2},0.0} LHS boundary
 	V_minus = fmin(V[i][j+1],0.0); // min{V_{i,j+1/2},0.0} RHS boundary
@@ -333,7 +340,7 @@ int main(int argc, char **argv){
       for (j=js; j<je; j++){
 	for (i=is; i<ie; i++){
 	  //index =(j-num_ghost)*nx2_r + (i-num_ghost); 
-	  realQ[index] = (float) Q[i][j]; 
+	  realQ[index] = (float) Q[i][j]/kappa[i][j]; //we solved for Q=qk density in computational space, convert to physical density 
 	  index++;
 	}
       }
@@ -358,12 +365,12 @@ double Y_physical(double x1, double x2){
 
 /*Stream function in physical coordinates */
 double stream_function(double x, double y){
-  //  return(y); //stream1: velocity is moving in the y-direction
-  return(x+y); //stream diagonally to the bottom right
-  double radius = sqrt(x*x + y*y); 
-  double phi = atan2(y,x); 
+  return(y); //stream1: velocity is moving in the y-direction
+  //return(x+y); //stream diagonally to the bottom right
+  //double radius = sqrt(x*x + y*y); 
+  //double phi = atan2(y,x); 
   //  return(radius);  //stream2: velocity is moving clockwise
-  //  return(-phi); //stream3: radially inward velocity
+  //return(-phi); //stream3: radially inward velocity
   //  return(phi); //stream3: radially outward velocity
   //  return(phi+radius); 
 }
@@ -383,8 +390,8 @@ double bc_x1i(double x, double y){
   return(0.0);
 }
 //bc at outermost radius
-double bc_x1f(double x, double y){
-  if ((x<-0.5) && (x>=-2.5) && (y>0.5) && (y<=2.5)){
+double bc_x1f(double x, double y, double t){
+  if ((x<-1.5) && (x>=-2.0) && (y>1.5) && (y<=2.0)){
     return(1.0);
   }
   return(0.0);
