@@ -26,6 +26,9 @@ typedef struct Metric{
 double stream_function(double x, double y);
 double X_physical(double, double);
 double Y_physical(double, double);
+void vector_coordinate_to_physical(double vr, double vphi, double phi, double *vx, double *vy);
+void vector_physical_to_coordinate(double vx, double vy, double phi, double *vr, double *vphi);
+void velocity_physical(double x_b,double y_b,double *vx,double *vy);
 double initial_condition(double x, double y);
 double bc_x1i(double x, double y);
 double bc_x1f(double x, double y,double t);
@@ -111,7 +114,7 @@ int main(int argc, char **argv){
   }
   for(i=js+1; i<=je; i++){
     x2_b[i] = x2_b[i-1] + dx2;
-    //    printf("%lf\n",x2_b[i]);
+    //printf("%lf\n",x2_b[i]);
   } 
 
   /*Cell centered (zonal) values of physical coordinate position */
@@ -148,9 +151,11 @@ int main(int argc, char **argv){
       y_b[i][j] = Y_physical(x1_b[i],x2_b[j]); 
     }
   }
+  /*Edge normal vectors in Cartesian coordinates */
+  // point radially outward and +\phi
+  
 
-
-  /*Coordinate capacity */
+  /*Coordinate cell capacity */
   double **kappa;
   double *datakappa;
   kappa = (double **) malloc(sizeof(double *)*nx1);
@@ -159,11 +164,15 @@ int main(int argc, char **argv){
     kappa[i] = &(datakappa[nx2*i]);
   }
   
-  for(i=is; i<ie; i++)
+  for(i=is; i<ie; i++){
     for(j=js; j<je; j++){
-      kappa[i][j] = x1[i]*dx1*dx2/(dx1*dx2); // C_ij/(dx1*dx2)???
-      // printf("k[i][j] = %lf\n",dt/(kappa[i][j]*dx1));
+      kappa[i][j] = x1[i]*dx1*dx2/(dx1*dx2); // C_ij/(dx1*dx2)
+      //capacity in ghost cells
+      kappa[ie][j] = (x1[ie-1]+dx1)*dx1*dx2/(dx1*dx2); 
     }
+    kappa[i][je] = (x1[i]+dx1)*dx1*dx2/(dx1*dx2); 
+  }
+  
   
   /* Stream function */ //probably dont need this array
   //this variable is cell centered stream 
@@ -193,16 +202,17 @@ int main(int argc, char **argv){
     U[i] = &(dataU[nx2*i]);
     V[i] = &(dataV[nx2*i]);
   }
-
-  for(i=is; i<ie; i++){
+  
+  /*Option #1 for computing edge velocities: path integral of Cartesian stream function */
+  /*  for(i=is; i<ie; i++){
     for(j=js; j<je; j++){ //go an additional step to capture nx2_r+1/2
       //average the corner stream functions
       U[i][j]= (stream_function(X_physical(x1[i]-dx1/2,x2[j]+dx2/2),Y_physical(x1[i]-dx1/2,x2[j]+dx2/2)) - 
 		stream_function(X_physical(x1[i]-dx1/2,x2[j]-dx2/2),Y_physical(x1[i]-dx1/2,x2[j]-dx2/2)))/(dx2);
       V[i][j]= -(stream_function(X_physical(x1[i]+dx1/2,x2[j]-dx2/2),Y_physical(x1[i]+dx1/2,x2[j]-dx2/2)) - 
-		 stream_function(X_physical(x1[i]-dx1/2,x2[j]-dx2/2),Y_physical(x1[i]-dx1/2,x2[j]-dx2/2)))/dx1;
-      //      if(j==10)
-      //printf("U[%d] = %lf\n",i,U[i][j]);
+      	 stream_function(X_physical(x1[i]-dx1/2,x2[j]-dx2/2),Y_physical(x1[i]-dx1/2,x2[j]-dx2/2)))/dx1;
+      if(j==10)
+	printf("i=%d, u,v=%lf,%lf\n",i,U[i][j],V[i][j]); 
     }
     j=je;
     U[i][j]= (stream_function(X_physical(x1[i]-dx1/2,x2[j-1]+3*dx2/2),Y_physical(x1[i]-dx1/2,x2[j-1]+3*dx2/2)) - 
@@ -216,7 +226,24 @@ int main(int argc, char **argv){
 	      stream_function(X_physical(x1[i-1]+dx1/2,x2[j]-dx2/2),Y_physical(x1[i-1]+dx1/2,x2[j]-dx2/2)))/(dx2);
     V[i][j]= -(stream_function(X_physical(x1[i-1]+3*dx1/2,x2[j]-dx2/2),Y_physical(x1[i-1]+3*dx1/2,x2[j]-dx2/2)) - 
 	      stream_function(X_physical(x1[i-1]+dx1/2,x2[j]-dx2/2),Y_physical(x1[i-1]+dx1/2,x2[j]-dx2/2)))/dx1;
-  }
+  } 
+  */
+  double ux,vy,temp; 
+  /*Option #2: directly specify velocity in Cartesian coordinate basis as a function of cartesian position*/   
+  for(i=is; i<=ie; i++){
+    for(j=js; j<=je; j++){ 
+      //radial face i-1/2
+      velocity_physical(X_physical(x1_b[i],x2_b[j]+dx2/2),Y_physical(x1_b[i],x2_b[j]+dx2/2),&ux,&vy);
+      // Average normal edge velocity: just transform face center velocity to local orthonormal basis? 
+      vector_physical_to_coordinate(ux,vy,x2_b[j]+dx2/2,&U[i][j],&temp); 
+      //phi face j-1/2
+      velocity_physical(X_physical(x1_b[i]+dx1/2,x2_b[j]),Y_physical(x1_b[i]+dx1/2,x2_b[j]),&ux,&vy);
+      vector_physical_to_coordinate(ux,vy,x2_b[j],&temp,&V[i][j]); 
+    }
+  } 
+
+  /*Option #3: specify velocity in polar coordinates */
+
 
   /*Conserved variable on the computational coordinate mesh*/
   double **Q;
@@ -275,8 +302,11 @@ int main(int argc, char **argv){
   for(k=0; k<1; k++){
     for(j=js; j<=je; j++){
       for(i=is; i<=ie; i++){
-	edge_vel[index] = U[i][j];
-	edge_vel[++index] = V[i][j];
+	vector_coordinate_to_physical(U[i][j],V[i][j], x2[j], &ux,&vy);
+	//edge_vel[index] = U[i][j];
+	//edge_vel[++index] = V[i][j]; 
+	edge_vel[index] = ux;
+	edge_vel[++index] = vy;
 	edge_vel[++index] = 0.0;
 	index++;
       }
@@ -299,6 +329,7 @@ int main(int argc, char **argv){
       for (j=js; j<je; j++){
 	Q[k][j] = bc_x1i(x[is][j],y[is][j]);
 	Q[nx1-1-k][j] = bc_x1f(x[ie-1][j],y[ie-1][j],(n+1)*dt);
+	//Q[nx1-1-k][j] *= kappa[ie-1][j]; //specify bc in computational or physical density?
       }
       for (i=is; i<ie; i++){
 	if(X2_PERIODIC){
@@ -315,15 +346,21 @@ int main(int argc, char **argv){
     /* Donor cell upwinding */
     for (i=is; i<ie; i++){
       for (j=js; j<je; j++){
-	/* Fluctuations in first coordinate */
+	/* First coordinate */
 	U_plus = fmax(U[i][j],0.0); // max{U_{i-1/2,j},0.0} LHS boundary
 	U_minus = fmin(U[i+1][j],0.0); // min{U_{i+1/2,j},0.0} RHS boundary
-	net_fluctuation[i][j] = dt/(kappa[i][j]*dx1)*(U_plus*(Q[i][j] - Q[i-1][j]) + U_minus*(Q[i+1][j] - Q[i][j]));
-	//net_fluctuation[i][j] = dt/(kappa[i][j]*dx1)*(x1_b[i]*U_plus*(Q[i][j] - Q[i-1][j]) + U_minus*(x1_b[i+1]*Q[i+1][j] - x1[i]*Q[i][j]));
-	/* Fluctuations in second coordinate */
+	/*Fluctuations: A^+ \Delta Q_{i-1/2,j} + A^- \Delta Q_{i+1/2,j} */
+	//	net_fluctuation[i][j] = dt/(kappa[i][j]*dx1)*(U_plus*(Q[i][j] - Q[i-1][j]) + U_minus*(Q[i+1][j] - Q[i][j]));
+	/* Fluxes: F_i+1/2 - F_i-1/2 */
+	net_fluctuation[i][j] = dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(fmax(U[i+1][j],0.0)*Q[i][j] + U_minus*Q[i+1][j])-x1_b[i]*(U_plus*Q[i-1][j] + fmin(U[i][j],0.0)*Q[i][j]));
+
+	/* Second coordinate */
 	V_plus = fmax(V[i][j],0.0); // max{V_{i,j-1/2},0.0} LHS boundary
 	V_minus = fmin(V[i][j+1],0.0); // min{V_{i,j+1/2},0.0} RHS boundary
-	net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*(V_plus*(Q[i][j] - Q[i][j-1]) + V_minus*(Q[i][j+1] - Q[i][j])); //dividing by kappa in ghost cell....
+	/*Fluctuations: B^+ \Delta Q_{i,j-1/2} + B^- \Delta Q_{i,j+1/2} */
+	//net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*(V_plus*(Q[i][j] - Q[i][j-1]) + V_minus*(Q[i][j+1] - Q[i][j]));	
+	/* Fluxes: G_j+1/2 - G_j-1/2 */
+	net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*((fmax(V[i][j+1],0.0)*Q[i][j] + V_minus*Q[i][j+1])-(V_plus*Q[i][j-1] + fmin(V[i][j],0.0)*Q[i][j]));
       }
     }
 
@@ -331,6 +368,11 @@ int main(int argc, char **argv){
     for (i=is; i<ie; i++)
       for (j=js; j<je; j++){
 	Q[i][j] -= net_fluctuation[i][j];
+      }
+    
+    /*Source terms */
+    for (i=is; i<ie; i++)
+      for (j=js; j<je; j++){
       }
 
     /*Output */
@@ -340,18 +382,19 @@ int main(int argc, char **argv){
       for (j=js; j<je; j++){
 	for (i=is; i<ie; i++){
 	  //index =(j-num_ghost)*nx2_r + (i-num_ghost); 
-	  realQ[index] = (float) Q[i][j]/kappa[i][j]; //we solved for Q=qk density in computational space, convert to physical density 
+	  realQ[index] = (float) Q[i][j];//*kappa[i][j]; //we solved for Q=qk density in computational space, convert to physical density ??
 	  index++;
 	}
       }
     }
 
     sprintf(filename,"advect-%.3d.vtk",n); 
-    write_curvilinear_mesh(filename,3,dims, pts, nvars,vardims, centering, varnames, vars);
+    if (n==nsteps-1)
+      write_curvilinear_mesh(filename,3,dims, pts, nvars,vardims, centering, varnames, vars);
     printf("step: %d time: %lf max{Q} = %lf\n",n+1,(n+1)*dt,find_max(realQ,nx1_r*nx2_r));
   }
   return(0); 
-}
+  }
 
 /* Map to physical (cartesian) coordinates */
 double X_physical(double x1, double x2){
@@ -361,18 +404,6 @@ double X_physical(double x1, double x2){
 double Y_physical(double x1, double x2){
   double y_cartesian = x1*sin(x2); 
   return(y_cartesian); 
-}
-
-/*Stream function in physical coordinates */
-double stream_function(double x, double y){
-  return(y); //stream1: velocity is moving in the y-direction
-  //return(x+y); //stream diagonally to the bottom right
-  //double radius = sqrt(x*x + y*y); 
-  //double phi = atan2(y,x); 
-  //  return(radius);  //stream2: velocity is moving clockwise
-  //return(-phi); //stream3: radially inward velocity
-  //  return(phi); //stream3: radially outward velocity
-  //  return(phi+radius); 
 }
 
 double initial_condition(double x, double y){
@@ -420,3 +451,43 @@ float find_max(float a[], int n) {
   }
   return(max); 
 }
+
+/*Transform polar vector (i.e. edge velocity) from orthonormal local basis to physical basis */
+void vector_coordinate_to_physical(double vr, double vphi, double phi, double *vx, double *vy){
+  *vx = vr*cos(phi) -sin(phi)*vphi; 
+  *vy = vr*sin(phi) +cos(phi)*vphi; 
+  return;
+}
+
+/*Transform Cartesian vector to orthonormal local basis */
+void vector_physical_to_coordinate(double vx, double vy, double phi, double *vr, double *vphi){
+  *vr = vx*cos(phi) +sin(phi)*vy; 
+  *vphi = -vx*sin(phi) +cos(phi)*vy; 
+  return;
+}
+/* VELOCITY OPTIONS: PICK ONLY ONE */
+void velocity_physical(double x_b,double y_b,double *vx,double *vy){
+  *vx=1.0;
+  *vy=0.0;
+  double angle = atan2(y_b,x_b); 
+  //*vx = -cos(angle);
+  //*vy = -sin(angle);
+
+  //these produce nonuniform radial velocities-- why do we get uniform scaled edge velocities with atan2(y,x) in stream function?
+  //bc the act of differencing to get proper velocity requires discrete divergence free condition
+  /*  *vx = -x_b/(x_b*x_b + y_b*y_b);
+   *vy = -y_b/(x_b*x_b + y_b*y_b);*/
+  return; 
+}
+
+/*Stream function in physical coordinates */
+double stream_function(double x, double y){
+  double radius = sqrt(x*x + y*y); 
+  double phi = atan2(y,x);
+  return(y); //stream1: velocity is moving in the y-direction
+  //  return(radius);  //stream2: velocity is moving clockwise
+  //return(-phi); //stream3: radially inward velocity
+  //  return(phi); //stream3: radially outward velocity
+  //return(x+y); //stream4 diagonally to the bottom right  
+}
+
