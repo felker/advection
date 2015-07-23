@@ -5,6 +5,7 @@
 #include "visit_writer.h"
 
 #define X2_PERIODIC 1 //flag to wrap phi coordinate and automatically mesh entire circle
+#define SECOND_ORDER //flag to turn on van Leer flux limiting
 
 /*possible bugs:
 
@@ -34,21 +35,23 @@ double bc_x1i(double x, double y);
 double bc_x1f(double x, double y,double t);
 double bc_x2i(double x, double y);
 double bc_x2f(double x, double y);
-
+double flux_PLM(double ds,double *imu);
 float find_max(float a[], int n);
+float find_min(float a[], int n); 
 
 int main(int argc, char **argv){
   int i,j,k,n; 
-  int nsteps=800;
-  double dt =0.01;
+  int nsteps=4000;
+  double dt =0.002;
   
   /* Computational (2D polar) grid coordinates */
-  int nx1 = 100;
-  int nx2 = 100;
+  int nx1 = 800;
+  int nx2 = 800;
 
   //number of ghost cells on both sides of each dimension
   //only need 1 for piecewise constant method
-  int num_ghost = 1;
+  //need 2 for piecewise linear reconstruction
+  int num_ghost = 2;
   int nx1_r = nx1;
   int nx2_r = nx2;
   nx1 += 2*num_ghost; 
@@ -241,6 +244,21 @@ int main(int argc, char **argv){
       vector_physical_to_coordinate(ux,vy,x2_b[j],&temp,&V[i][j]); 
     }
   } 
+  /* check normalization of velocities  */
+  /* these are naturally not normalized because the cell has finite volume so the edge velocities arent the velocity of the same point */
+  double norm; 
+  double max_deviation =0.0; 
+  for(i=is; i<=ie; i++){
+    for(j=js; j<=je; j++){ 
+      norm = sqrt(U[i][j]*U[i][j] + V[i][j]*V[i][j]); 
+      if (fabs(norm-1.0) > max_deviation)
+	max_deviation = fabs(norm-1.0); 
+      //  printf("%0.12lf\n",norm);
+    }
+  }
+  //  printf("maximum deviation from 1.0 = %0.12lf\n",max_deviation); 
+
+
 
   /*Option #3: specify velocity in polar coordinates */
 
@@ -329,12 +347,11 @@ int main(int argc, char **argv){
       for (j=js; j<je; j++){
 	Q[k][j] = bc_x1i(x[is][j],y[is][j]);
 	Q[nx1-1-k][j] = bc_x1f(x[ie-1][j],y[ie-1][j],(n+1)*dt);
-	//Q[nx1-1-k][j] *= kappa[ie-1][j]; //specify bc in computational or physical density?
       }
       for (i=is; i<ie; i++){
 	if(X2_PERIODIC){
-	  Q[i][k] = Q[i][je-1];
-	  Q[i][nx2-1-k] = Q[i][js];
+	  Q[i][k] = Q[i][je-1-k];
+	  Q[i][nx2-1-k] = Q[i][js+k];
 	}
 	else{
 	Q[i][k] = bc_x2i(x[i][js],y[i][js]);
@@ -342,7 +359,13 @@ int main(int argc, char **argv){
 	}
       }
     }
+    /*    for (i=ie; i<nx1; i++)
+      for (j=0; j<nx2; j++){
+	printf("Q[%d][%d] = %lf\n",i,j,Q[i][j]);
+    }*/
 
+    double flux_limiter =0.0; 
+    double *qmu = (double *) malloc(sizeof(double)*3); //manually copy array for computing slope limiters
     /* Donor cell upwinding */
     for (i=is; i<ie; i++){
       for (j=js; j<je; j++){
@@ -351,16 +374,83 @@ int main(int argc, char **argv){
 	U_minus = fmin(U[i+1][j],0.0); // min{U_{i+1/2,j},0.0} RHS boundary
 	/*Fluctuations: A^+ \Delta Q_{i-1/2,j} + A^- \Delta Q_{i+1/2,j} */
 	//	net_fluctuation[i][j] = dt/(kappa[i][j]*dx1)*(U_plus*(Q[i][j] - Q[i-1][j]) + U_minus*(Q[i+1][j] - Q[i][j]));
-	/* Fluxes: F_i+1/2 - F_i-1/2 */
+	/* First order fluxes: F_i+1/2 - F_i-1/2 */
 	net_fluctuation[i][j] = dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(fmax(U[i+1][j],0.0)*Q[i][j] + U_minus*Q[i+1][j])-x1_b[i]*(U_plus*Q[i-1][j] + fmin(U[i][j],0.0)*Q[i][j]));
-
+#ifdef SECOND_ORDER
+	/* Second order fluxes */
+	if (U[i+1][j] > 0.0){
+	  qmu[0] = Q[i-1][j];  //points to the two preceeding bins; 
+	  qmu[1] = Q[i][j];  
+	  qmu[2] = Q[i+1][j];  
+	  flux_limiter= flux_PLM(dx1,qmu);
+	}
+	else{
+	  qmu[0] = Q[i+2][j]; //centered around current bin
+	  qmu[1] = Q[i+1][j];  
+	  qmu[2] = Q[i][j];  
+	  flux_limiter= flux_PLM(dx1,qmu);
+	  /*	  if (flux_limiter != 0.0){
+	    printf("i,j: %d,%d F_{i+1/2} flux limiter: %lf\n",i,j,flux_limiter);
+	    printf("Q0 = %lf Q1= %lf Q2 = %lf\n",qmu[0],qmu[1],qmu[2]); } */
+	}
+	//F^H_{i+1/2,j}
+	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(1-dt*fabs(U[i+1][j])/dx1)*fabs(U[i+1][j])*flux_limiter/2);
+	if (U[i][j] > 0.0){
+	  qmu[0] = Q[i-2][j];  //points to the two preceeding bins; 
+	  qmu[1] = Q[i-1][j];  
+	  qmu[2] = Q[i][j];  
+	  flux_limiter= flux_PLM(dx1,qmu);
+	}
+	else{
+	  qmu[0] = Q[i+1][j]; //centered around current bin
+	  qmu[1] = Q[i][j];  
+	  qmu[2] = Q[i-1][j];  
+	  flux_limiter= flux_PLM(dx1,qmu);
+	}
+	//F^H_{i-1/2,j}
+	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i]*(1-dt*fabs(U[i][j])/dx1)*fabs(U[i][j])*flux_limiter/2);
+#endif
 	/* Second coordinate */
 	V_plus = fmax(V[i][j],0.0); // max{V_{i,j-1/2},0.0} LHS boundary
 	V_minus = fmin(V[i][j+1],0.0); // min{V_{i,j+1/2},0.0} RHS boundary
 	/*Fluctuations: B^+ \Delta Q_{i,j-1/2} + B^- \Delta Q_{i,j+1/2} */
 	//net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*(V_plus*(Q[i][j] - Q[i][j-1]) + V_minus*(Q[i][j+1] - Q[i][j]));	
-	/* Fluxes: G_j+1/2 - G_j-1/2 */
+	/* Fluxes: G_i,j+1/2 - G_i,j-1/2 */
 	net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*((fmax(V[i][j+1],0.0)*Q[i][j] + V_minus*Q[i][j+1])-(V_plus*Q[i][j-1] + fmin(V[i][j],0.0)*Q[i][j]));
+#ifdef SECOND_ORDER
+	/* Second order fluxes */
+	if (V[i][j+1] > 0.0){
+	  qmu[0] = Q[i][j-1];  //points to the two preceeding bins; 
+	  qmu[1] = Q[i][j];  
+	  qmu[2] = Q[i][j+1];  
+	  flux_limiter= flux_PLM(dx2,qmu);
+	}
+	else{
+	  qmu[0] = Q[i][j+2]; //centered around current bin
+	  qmu[1] = Q[i][j+1];  
+	  qmu[2] = Q[i][j];  
+	  flux_limiter= flux_PLM(dx2,qmu);
+	  /*	  if (flux_limiter != 0.0){
+	    printf("i,j: %d,%d F_{i+1/2} flux limiter: %lf\n",i,j,flux_limiter);
+	    printf("Q0 = %lf Q1= %lf Q2 = %lf\n",qmu[0],qmu[1],qmu[2]); } */
+	}
+	//G^H_{i,j+1/2}
+	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j+1])/dx2)*fabs(V[i][j+1])*flux_limiter/2);
+	if (V[i][j] > 0.0){
+	  qmu[0] = Q[i][j-2];  //points to the two preceeding bins; 
+	  qmu[1] = Q[i][j-1];  
+	  qmu[2] = Q[i][j];  
+	  flux_limiter = flux_PLM(dx2,qmu);
+	}
+	else{
+	  qmu[0] = Q[i][j+1]; //centered around current bin
+	  qmu[1] = Q[i][j];  
+	  qmu[2] = Q[i][j-1];  
+	  flux_limiter= flux_PLM(dx2,qmu);
+	}
+	//G^H_{i,j-1/2}
+	net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j])/dx2)*fabs(V[i][j])*flux_limiter/2);
+#endif
       }
     }
 
@@ -382,19 +472,31 @@ int main(int argc, char **argv){
       for (j=js; j<je; j++){
 	for (i=is; i<ie; i++){
 	  //index =(j-num_ghost)*nx2_r + (i-num_ghost); 
-	  realQ[index] = (float) Q[i][j];//*kappa[i][j]; //we solved for Q=qk density in computational space, convert to physical density ??
+	  realQ[index] = (float) Q[i][j];//*kappa[i][j]; //\bar{q}=qk density in computational space
 	  index++;
+	}
+      }
+    }
+    //debug
+    if (find_max(realQ,nx1_r*nx2_r) > 1.1){
+      printf("Q greater than 1.0!\n"); 
+      for (i=1;i<nx1; i++){
+	for (j=1; j<nx2; j++){
+	  if (Q[i][j] > 1.0){
+	    printf("i=%d j=%d Q[i][j] = %0.10lf\n",i,j,Q[i][j]); 
+	    return(0); 
+	  }
 	}
       }
     }
 
     sprintf(filename,"advect-%.3d.vtk",n); 
-    if (n==nsteps-1)
+    if (n==nsteps-1) //for only the final result
       write_curvilinear_mesh(filename,3,dims, pts, nvars,vardims, centering, varnames, vars);
-    printf("step: %d time: %lf max{Q} = %lf\n",n+1,(n+1)*dt,find_max(realQ,nx1_r*nx2_r));
+      printf("step: %d time: %lf max{Q} = %0.7lf min{Q} = %0.7lf\n",n+1,(n+1)*dt,find_max(realQ,nx1_r*nx2_r),find_min(realQ,nx1_r*nx2_r));
   }
   return(0); 
-  }
+}
 
 /* Map to physical (cartesian) coordinates */
 double X_physical(double x1, double x2){
@@ -452,6 +554,20 @@ float find_max(float a[], int n) {
   return(max); 
 }
 
+float find_min(float a[], int n) {
+  int i,index;
+  float min; 
+  min = a[0];
+  index = 0;
+  for (i = 1; i < n; i++) {
+    if (a[i] < min) {
+      index = i;
+      min = a[i];
+    }
+  }
+  return(min); 
+}
+
 /*Transform polar vector (i.e. edge velocity) from orthonormal local basis to physical basis */
 void vector_coordinate_to_physical(double vr, double vphi, double phi, double *vx, double *vy){
   *vx = vr*cos(phi) -sin(phi)*vphi; 
@@ -491,3 +607,16 @@ double stream_function(double x, double y){
   //return(x+y); //stream4 diagonally to the bottom right  
 }
 
+/* a duplication of the function in ATHENA FullRT_flux.c */
+double flux_PLM(double ds,double *imu){
+  //the upwind slope
+  double delq1 = (imu[2] - imu[1])/ds;
+  double delq2 = (imu[1] - imu[0])/ds;
+  double dqi0;
+  if(delq1*delq2 >0.0) //minmod function
+    dqi0 = 2.0*delq1*delq2/(delq1+delq2);
+  else
+    dqi0 = 0.0;
+  //unknown why ds is in this function. might have to do with nonuniform grids
+  return(ds*dqi0); 
+}

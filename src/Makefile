@@ -1,5 +1,5 @@
 CC = gcc
-CCFLAGS =
+CCFLAGS = 
 LINK = gcc
 LINKFLAGS = 
 
