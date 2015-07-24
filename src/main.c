@@ -6,7 +6,8 @@
 
 #define X2_PERIODIC 1 //flag to wrap phi coordinate and automatically mesh entire circle
 #define AUTO_TIMESTEP 1 //flag for automatically setting dt such that max{CFL} = 1
-#define SECOND_ORDER //flag to turn on van Leer flux limiting
+#define OUTPUT_INTERVAL 1 //how many timesteps to dump simulation data. 0 for only last step, 1 for every step
+#undef SECOND_ORDER //flag to turn on van Leer flux limiting
 
 double stream_function(double x, double y);
 double X_physical(double, double);
@@ -26,12 +27,12 @@ float sum(float a[], int n);
 
 int main(int argc, char **argv){
   int i,j,k,n; 
-  int nsteps=1600;
+  int nsteps=50;
   double dt =0.01;
   
   /* Computational (2D polar) grid coordinates */
-  int nx1 = 200;
-  int nx2 = 200;
+  int nx1 = 50;
+  int nx2 = 50;
 
   //number of ghost cells on both sides of each dimension
   //only need 1 for piecewise constant method
@@ -88,7 +89,7 @@ int main(int argc, char **argv){
   }
   for(i=js+1; i<je; i++){
     x2[i] = x2[i-1] + dx2;
-    //    printf("%lf\n",x2[i]);
+    //printf("%lf\n",x2[i]);
   } 
 
   /*Mesh edge (nodal) values of computational coordinate position */
@@ -224,10 +225,12 @@ int main(int argc, char **argv){
       velocity_physical(X_physical(x1_b[i],x2_b[j]+dx2/2),Y_physical(x1_b[i],x2_b[j]+dx2/2),&ux,&vy);
       // Average normal edge velocity: just transform face center velocity to local orthonormal basis? 
       vector_physical_to_coordinate(ux,vy,x2_b[j]+dx2/2,&U[i][j],&temp); 
-      //      printf("U_before = %lf\n",U[i][j]);
+      
       //EXACT SOLUTION FOR EDGE VELOCITY FOR HORIZONTAL FLOW
-      U[i][j] = (sin(x2_b[j]+dx2) - sin(x2_b[j]))/(dx2); 
+      //      printf("U_before = %lf\n",U[i][j]);
+      //      U[i][j] = (sin(x2_b[j]+dx2) - sin(x2_b[j]))/(dx2); 
       //      printf("U_after = %lf\n",U[i][j]);
+
       //phi face j-1/2
       velocity_physical(X_physical(x1_b[i]+dx1/2,x2_b[j]),Y_physical(x1_b[i]+dx1/2,x2_b[j]),&ux,&vy);
       vector_physical_to_coordinate(ux,vy,x2_b[j],&temp,&V[i][j]); 
@@ -433,6 +436,7 @@ int main(int argc, char **argv){
 	//F^H_{i-1/2,j}
 	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i]*(1-dt*fabs(U[i][j])/(dx1))*fabs(U[i][j])*flux_limiter/2);
 #endif
+	printf("flux limiter = %lf, U[i] = %lf, U[i+1] = %lf\n",flux_limiter,U[i][j],U[i+1][j]);
 	/* Second coordinate */
 	V_plus = fmax(V[i][j],0.0); // max{V_{i,j-1/2},0.0} LHS boundary
 	V_minus = fmin(V[i][j+1],0.0); // min{V_{i,j+1/2},0.0} RHS boundary
@@ -514,8 +518,13 @@ int main(int argc, char **argv){
       }*/
 
     sprintf(filename,"advect-%.3d.vtk",n); 
-    if (n==nsteps-1) //for only the final result
-      write_curvilinear_mesh(filename,3,dims, pts, nvars,vardims, centering, varnames, vars);
+    if(!OUTPUT_INTERVAL){
+      if (n==nsteps-1) //for only the final result
+	write_curvilinear_mesh(filename,3,dims, pts, nvars,vardims, centering, varnames, vars);}
+    else{
+      if (!(n%OUTPUT_INTERVAL)) //HAVENT CHECKED THIS
+	write_curvilinear_mesh(filename,3,dims, pts, nvars,vardims, centering, varnames, vars);}
+      
       printf("step: %d time: %lf max{Q} = %0.7lf min{Q} = %0.7lf sum{Q} = %0.7lf \n",
 	     n+1,(n+1)*dt,find_max(realQ,nx1_r*nx2_r),find_min(realQ,nx1_r*nx2_r),sum(realQ,nx1_r*nx2_r));
   }
@@ -548,10 +557,10 @@ double bc_x1i(double x, double y){
 }
 //bc at outermost radius
 double bc_x1f(double x, double y, double t){
-  if ((x<-1.5) && (x>=-2.0) && (y>1.5) && (y<=2.0)){
+  //  if ((x<-1.5) && (x>=-2.0) && (y>1.5) && (y<=2.0)){
     return(1.0);
-}
-  return(0.0);
+    //}
+    //  return(0.0);
 }
 //bc at phi=0.0
 double bc_x2i(double x, double y){
@@ -617,11 +626,11 @@ void vector_physical_to_coordinate(double vx, double vy, double phi, double *vr,
 }
 /* VELOCITY OPTIONS: PICK ONLY ONE */
 void velocity_physical(double x_b,double y_b,double *vx,double *vy){
-  *vx=1.0;
-  *vy=0.0;
+  //  *vx=1.0;
+  //  *vy=0.0;
   double angle = atan2(y_b,x_b); 
-  //*vx = -cos(angle);
-  //  *vy = -sin(angle);
+  *vx = -cos(angle);
+  *vy = -sin(angle);
 
   //these produce nonuniform radial velocities-- why do we get uniform scaled edge velocities with atan2(y,x) in stream function?
   //bc the act of differencing to get proper velocity requires discrete divergence free condition
