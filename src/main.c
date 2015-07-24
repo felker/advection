@@ -5,25 +5,9 @@
 #include "visit_writer.h"
 
 #define X2_PERIODIC 1 //flag to wrap phi coordinate and automatically mesh entire circle
+#define AUTO_TIMESTEP 1 //flag for automatically setting dt such that max{CFL} = 1
 #define SECOND_ORDER //flag to turn on van Leer flux limiting
 
-/*possible bugs:
-
-*/
-
-/*
-typedef struct Metric{
-
-  double g10; 
-  double g11; 
-  double g12;
-  double g13;
-
-
-} Metric; 
-  //number of spacelike coordinates
-  int ndims=2;
-*/
 double stream_function(double x, double y);
 double X_physical(double, double);
 double Y_physical(double, double);
@@ -38,15 +22,16 @@ double bc_x2f(double x, double y);
 double flux_PLM(double ds,double *imu);
 float find_max(float a[], int n);
 float find_min(float a[], int n); 
+float sum(float a[], int n);
 
 int main(int argc, char **argv){
   int i,j,k,n; 
-  int nsteps=4000;
-  double dt =0.002;
+  int nsteps=1600;
+  double dt =0.01;
   
   /* Computational (2D polar) grid coordinates */
-  int nx1 = 800;
-  int nx2 = 800;
+  int nx1 = 200;
+  int nx2 = 200;
 
   //number of ghost cells on both sides of each dimension
   //only need 1 for piecewise constant method
@@ -239,11 +224,16 @@ int main(int argc, char **argv){
       velocity_physical(X_physical(x1_b[i],x2_b[j]+dx2/2),Y_physical(x1_b[i],x2_b[j]+dx2/2),&ux,&vy);
       // Average normal edge velocity: just transform face center velocity to local orthonormal basis? 
       vector_physical_to_coordinate(ux,vy,x2_b[j]+dx2/2,&U[i][j],&temp); 
+      //      printf("U_before = %lf\n",U[i][j]);
+      //EXACT SOLUTION FOR EDGE VELOCITY FOR HORIZONTAL FLOW
+      U[i][j] = (sin(x2_b[j]+dx2) - sin(x2_b[j]))/(dx2); 
+      //      printf("U_after = %lf\n",U[i][j]);
       //phi face j-1/2
       velocity_physical(X_physical(x1_b[i]+dx1/2,x2_b[j]),Y_physical(x1_b[i]+dx1/2,x2_b[j]),&ux,&vy);
       vector_physical_to_coordinate(ux,vy,x2_b[j],&temp,&V[i][j]); 
     }
   } 
+
   /* check normalization of velocities  */
   /* these are naturally not normalized because the cell has finite volume so the edge velocities arent the velocity of the same point */
   double norm; 
@@ -263,6 +253,39 @@ int main(int argc, char **argv){
   /*Option #3: specify velocity in polar coordinates */
 
 
+  /*Check CFL condition, reset timestep */
+  float **cfl;
+  float *dataCFL;
+  cfl = (float **) malloc(sizeof(float *)*nx1);
+  dataCFL = (float *) malloc(sizeof(float)*nx1*nx2);
+  for(i=0; i<nx1; i++){
+    cfl[i] = &(dataCFL[nx2*i]);
+  }
+  for(i=1; i<nx1; i++){
+    for(j=1; j<nx2; j++){ //based on edge velocities or cell centered u,v?
+      if (i >=is && i< ie && j >=js && j <je)
+	cfl[i][j] = fabs(U[i][j])*dt/dx1 + fabs(V[i][j])*dt/dx2;
+      else
+	cfl[i][j] =0.0; 
+    }
+  }
+  //find maximum CFL value in domain
+  float  max_CFL = find_max(dataCFL,nx1*nx2); 
+  printf("Largest CFL number = %lf\n",max_CFL); 
+  if (max_CFL > 1.0 || AUTO_TIMESTEP){//reset timestep if needed
+    dt = dt/max_CFL; 
+    for(i=1; i<nx1; i++){
+      for(j=1; j<nx2; j++){ 
+	if (i >=is && i< ie && j >=js && j <je)
+	  cfl[i][j] = fabs(U[i][j])*dt/dx1 + fabs(V[i][j])*dt/dx2;
+	else
+	  cfl[i][j] =0.0; 
+      }
+    } 
+  }
+  max_CFL = find_max(dataCFL,nx1*nx2); 
+  printf("Largest CFL number = %lf\n",max_CFL); 
+
   /*Conserved variable on the computational coordinate mesh*/
   double **Q;
   double *dataQ;
@@ -280,7 +303,7 @@ int main(int argc, char **argv){
     }
   }
 
-  //fluctuation variables
+  //net fluctuations/fluxes
   double U_plus,U_minus,V_plus,V_minus;
   double **net_fluctuation;
   double *dataFlux;
@@ -394,7 +417,7 @@ int main(int argc, char **argv){
 	    printf("Q0 = %lf Q1= %lf Q2 = %lf\n",qmu[0],qmu[1],qmu[2]); } */
 	}
 	//F^H_{i+1/2,j}
-	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(1-dt*fabs(U[i+1][j])/dx1)*fabs(U[i+1][j])*flux_limiter/2);
+	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(1-dt*fabs(U[i+1][j])/(dx1))*fabs(U[i+1][j])*flux_limiter/2);
 	if (U[i][j] > 0.0){
 	  qmu[0] = Q[i-2][j];  //points to the two preceeding bins; 
 	  qmu[1] = Q[i-1][j];  
@@ -408,7 +431,7 @@ int main(int argc, char **argv){
 	  flux_limiter= flux_PLM(dx1,qmu);
 	}
 	//F^H_{i-1/2,j}
-	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i]*(1-dt*fabs(U[i][j])/dx1)*fabs(U[i][j])*flux_limiter/2);
+	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i]*(1-dt*fabs(U[i][j])/(dx1))*fabs(U[i][j])*flux_limiter/2);
 #endif
 	/* Second coordinate */
 	V_plus = fmax(V[i][j],0.0); // max{V_{i,j-1/2},0.0} LHS boundary
@@ -435,7 +458,7 @@ int main(int argc, char **argv){
 	    printf("Q0 = %lf Q1= %lf Q2 = %lf\n",qmu[0],qmu[1],qmu[2]); } */
 	}
 	//G^H_{i,j+1/2}
-	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j+1])/dx2)*fabs(V[i][j+1])*flux_limiter/2);
+	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j+1])/(dx2))*fabs(V[i][j+1])*flux_limiter/2);
 	if (V[i][j] > 0.0){
 	  qmu[0] = Q[i][j-2];  //points to the two preceeding bins; 
 	  qmu[1] = Q[i][j-1];  
@@ -449,7 +472,7 @@ int main(int argc, char **argv){
 	  flux_limiter= flux_PLM(dx2,qmu);
 	}
 	//G^H_{i,j-1/2}
-	net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j])/dx2)*fabs(V[i][j])*flux_limiter/2);
+	net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j])/(dx2))*fabs(V[i][j])*flux_limiter/2);
 #endif
       }
     }
@@ -477,8 +500,8 @@ int main(int argc, char **argv){
 	}
       }
     }
-    //debug
-    if (find_max(realQ,nx1_r*nx2_r) > 1.1){
+    //debug only horizontal flow
+    /*    if (find_max(realQ,nx1_r*nx2_r) > 1.1){
       printf("Q greater than 1.0!\n"); 
       for (i=1;i<nx1; i++){
 	for (j=1; j<nx2; j++){
@@ -488,12 +511,13 @@ int main(int argc, char **argv){
 	  }
 	}
       }
-    }
+      }*/
 
     sprintf(filename,"advect-%.3d.vtk",n); 
     if (n==nsteps-1) //for only the final result
       write_curvilinear_mesh(filename,3,dims, pts, nvars,vardims, centering, varnames, vars);
-      printf("step: %d time: %lf max{Q} = %0.7lf min{Q} = %0.7lf\n",n+1,(n+1)*dt,find_max(realQ,nx1_r*nx2_r),find_min(realQ,nx1_r*nx2_r));
+      printf("step: %d time: %lf max{Q} = %0.7lf min{Q} = %0.7lf sum{Q} = %0.7lf \n",
+	     n+1,(n+1)*dt,find_max(realQ,nx1_r*nx2_r),find_min(realQ,nx1_r*nx2_r),sum(realQ,nx1_r*nx2_r));
   }
   return(0); 
 }
@@ -526,7 +550,7 @@ double bc_x1i(double x, double y){
 double bc_x1f(double x, double y, double t){
   if ((x<-1.5) && (x>=-2.0) && (y>1.5) && (y<=2.0)){
     return(1.0);
-  }
+}
   return(0.0);
 }
 //bc at phi=0.0
@@ -568,6 +592,16 @@ float find_min(float a[], int n) {
   return(min); 
 }
 
+float sum(float a[], int n) {
+  int i,index;
+  float sum; 
+  sum = a[0];
+  for (i = 1; i < n; i++) {
+    sum+= a[i]; 
+  }
+  return(sum); 
+}
+
 /*Transform polar vector (i.e. edge velocity) from orthonormal local basis to physical basis */
 void vector_coordinate_to_physical(double vr, double vphi, double phi, double *vx, double *vy){
   *vx = vr*cos(phi) -sin(phi)*vphi; 
@@ -587,7 +621,7 @@ void velocity_physical(double x_b,double y_b,double *vx,double *vy){
   *vy=0.0;
   double angle = atan2(y_b,x_b); 
   //*vx = -cos(angle);
-  //*vy = -sin(angle);
+  //  *vy = -sin(angle);
 
   //these produce nonuniform radial velocities-- why do we get uniform scaled edge velocities with atan2(y,x) in stream function?
   //bc the act of differencing to get proper velocity requires discrete divergence free condition
