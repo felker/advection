@@ -8,13 +8,15 @@
 #define X2_PERIODIC 1 //flag to wrap phi coordinate and automatically mesh entire circle
 #define AUTO_TIMESTEP 1 //flag for automatically setting dt such that max{cfl_array} = CFL
 #define CFL 0.8 //if set to 1.0, 1D constant advection along grid is exact. 
-#define OUTPUT_INTERVAL 0 //how many timesteps to dump simulation data. 0 for only last step, 1 for every step
-#define SECOND_ORDER //flag to turn on van Leer flux limiting
+#define OUTPUT_INTERVAL 1 //how many timesteps to dump simulation data. 0 for only last step, 1 for every step
+#undef SECOND_ORDER //flag to turn on van Leer flux limiting
 
 //select problem (mutually exclusive)
 #undef RADIAL_INWARD
-#define SEMI_CLOCK
+#undef SEMI_CLOCK
 #undef HORIZONTAL
+#undef GAUSS_RADIAL
+#define GAUSS_CLOCK
 
 #ifdef SEMI_CLOCK
 #define X2_PERIODIC 0
@@ -36,6 +38,7 @@ double flux_PLM(double ds,double *imu);
 float find_max(float a[], int n);
 float find_min(float a[], int n); 
 float sum(float a[], int n);
+double gaussian(double x_0, double y_0,double x,double y);
 
 int main(int argc, char **argv){
   int i,j,k,n; 
@@ -43,8 +46,8 @@ int main(int argc, char **argv){
   double dt =0.01;
   
   /* Computational (2D polar) grid coordinates */
-  int nx1 = 400;
-  int nx2 = 400;
+  int nx1 = 200;
+  int nx2 = 200;
 
   //number of ghost cells on both sides of each dimension
   //only need 1 for piecewise constant method
@@ -189,7 +192,7 @@ int main(int argc, char **argv){
   }
   
   /*Option #1 for computing edge velocities: path integral of Cartesian stream function */
- /* Stream function */ //probably dont need this array
+  /* Stream function */ //probably dont need this array
   //this variable is cell centered stream 
   /* double **stream;
   double *datastream;
@@ -248,7 +251,7 @@ int main(int argc, char **argv){
       //phi face j-1/2
       velocity_physical(X_physical(x1_b[i]+dx1/2,x2_b[j]),Y_physical(x1_b[i]+dx1/2,x2_b[j]),&ux,&vy);
       vector_physical_to_coordinate(ux,vy,x2_b[j],&temp,&V[i][j]); 
-#ifdef SEMI_CLOCK
+#if defined(SEMI_CLOCK) || defined(GAUSS_CLOCK)
       velocity_coordinate(x1_b[i],x2_b[j],&U[i][j],&V[i][j]);
 #endif
       //      printf("U,V = %lf,%lf\n",U[i][j],V[i][j]);
@@ -310,6 +313,18 @@ int main(int argc, char **argv){
 #ifdef SEMI_CLOCK
   nsteps = M_PI/dt;
   printf("nsteps = %d, dt = %lf, t_final = %lf\n",nsteps,dt,nsteps*dt);
+#endif
+  
+#ifdef GAUSS_CLOCK
+  nsteps = 2*M_PI/dt;
+  //turn dt down until mod(2*MPI,nsteps) = 0
+  double remainder = 2*M_PI -nsteps*dt;
+  double extra = remainder/nsteps; 
+  double dt_new = dt +extra; 
+  printf("nsteps = %d, dt = %lf, dt_new =%lf, remainder = %lf, t_final = %lf t_final_new =%lf\n",nsteps,dt,dt_new,remainder,nsteps*dt,nsteps*dt_new);
+  max_cfl *= dt_new/dt; 
+  dt = dt_new; 
+  printf("Largest CFL number = %lf\n",max_cfl); 
 #endif
 
   /*Conserved variable on the computational coordinate mesh*/
@@ -423,14 +438,14 @@ int main(int argc, char **argv){
 	net_fluctuation[i][j] = dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(fmax(U[i+1][j],0.0)*Q[i][j] + U_minus*Q[i+1][j])-x1_b[i]*(U_plus*Q[i-1][j] + fmin(U[i][j],0.0)*Q[i][j]));
 #ifdef SECOND_ORDER
 	/* Second order fluxes */
-	if (U[i+1][j] > 0.0){
-	  qmu[0] = Q[i-1][j];  //points to the two preceeding bins; 
+	if (U[i+1][j] > 0.0){ //middle element is always the upwind element
+	  qmu[0] = Q[i-1][j];
 	  qmu[1] = Q[i][j];  
 	  qmu[2] = Q[i+1][j];  
 	  flux_limiter= flux_PLM(dx1,qmu);
 	}
 	else{
-	  qmu[0] = Q[i+2][j]; //centered around current bin
+	  qmu[0] = Q[i+2][j];
 	  qmu[1] = Q[i+1][j];  
 	  qmu[2] = Q[i][j];  
 	  flux_limiter= flux_PLM(dx1,qmu);
@@ -439,9 +454,9 @@ int main(int argc, char **argv){
 	    printf("Q0 = %lf Q1= %lf Q2 = %lf\n",qmu[0],qmu[1],qmu[2]); } */
 	}
 	//F^H_{i+1/2,j}
-	//	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(1-dt*fabs(U[i+1][j])/(dx1))*fabs(U[i+1][j])*flux_limiter/2);
+	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(1-dt*fabs(U[i+1][j])/(dx1))*fabs(U[i+1][j])*flux_limiter/2);
 	//	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*((kappa[i][j]/x1_b[i+1]-dt*fabs(U[i+1][j])/(x1_b[i+1]*dx1))*fabs(U[i+1][j])*flux_limiter/2);
-	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(kappa[i][j]/x1_b[i+1]-dt*fabs(U[i+1][j])/(x1_b[i+1]*dx1))*fabs(U[i+1][j])*flux_limiter/2);
+	//	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(kappa[i][j]/x1_b[i+1]-dt*fabs(U[i+1][j])/(x1_b[i+1]*dx1))*fabs(U[i+1][j])*flux_limiter/2);
 	if (U[i][j] > 0.0){
 	  qmu[0] = Q[i-2][j];  //points to the two preceeding bins; 
 	  qmu[1] = Q[i-1][j];  
@@ -455,9 +470,9 @@ int main(int argc, char **argv){
 	  flux_limiter= flux_PLM(dx1,qmu);
 	}
 	//F^H_{i-1/2,j}
-	//	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*(x1_b[i]*(1-dt*fabs(U[i][j])/(dx1))*fabs(U[i][j])*flux_limiter/2);
+	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i]*(1-dt*fabs(U[i][j])/(dx1))*fabs(U[i][j])*flux_limiter/2);
 	//	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*((kappa[i-1][j]/x1_b[i]-dt*fabs(U[i][j])/(x1_b[i]*dx1))*fabs(U[i][j])*flux_limiter/2);
-	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*(x1_b[i]*(kappa[i-1][j]/x1_b[i]-dt*fabs(U[i][j])/(x1_b[i]*dx1))*fabs(U[i][j])*flux_limiter/2);
+	//net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*(x1_b[i]*(kappa[i-1][j]/x1_b[i]-dt*fabs(U[i][j])/(x1_b[i]*dx1))*fabs(U[i][j])*flux_limiter/2);
 #endif
 	/* Second coordinate */
 	V_plus = fmax(V[i][j],0.0); // max{V_{i,j-1/2},0.0} LHS boundary
@@ -484,6 +499,7 @@ int main(int argc, char **argv){
 	    printf("Q0 = %lf Q1= %lf Q2 = %lf\n",qmu[0],qmu[1],qmu[2]); } */
 	}
 	//G^H_{i,j+1/2}
+	//net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j+1])/(kappa[i][j]*dx2))*fabs(V[i][j+1])*flux_limiter/2);
 	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j+1])/(dx2))*fabs(V[i][j+1])*flux_limiter/2);
 	if (V[i][j] > 0.0){
 	  qmu[0] = Q[i][j-2];  //points to the two preceeding bins; 
@@ -498,6 +514,7 @@ int main(int argc, char **argv){
 	  flux_limiter= flux_PLM(dx2,qmu);
 	}
 	//G^H_{i,j-1/2}
+	//net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j])/(kappa[i][j]*dx2))*fabs(V[i][j])*flux_limiter/2);
 	net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j])/(dx2))*fabs(V[i][j])*flux_limiter/2);
 #endif
       }
@@ -564,9 +581,16 @@ double Y_physical(double x1, double x2){
 }
 
 double initial_condition(double x, double y){
-  /*    if ((x<-1.0) && (x>=-1.5) && (y>1.0) && (y<1.5)){
-    return(1.0);
-    }  */
+#if defined(GAUSS_CLOCK) || defined(GAUSS_RADIAL)
+  //if ((x<-1.0) && (x>=-1.5) && (y>1.0) && (y<1.5)){
+  //  return(1.0);
+  //}
+
+  //create a smooth gaussian in 2D
+
+  return(gaussian(-1,1.5,x,y));
+#endif 
+
   return(0.0);
 }
 
@@ -674,8 +698,14 @@ void velocity_physical(double x_b,double y_b,double *vx,double *vy){
 }
 
 void velocity_coordinate(double r_b,double phi_b,double *vr,double *vphi){
+#if defined(SEMI_CLOCK)
   *vr =0.0;
   *vphi = -1.0;
+#endif
+#if defined(GAUSS_CLOCK)
+  *vr =0.0;
+  *vphi = -r_b;
+#endif
   return;
 }
 
@@ -702,4 +732,19 @@ double flux_PLM(double ds,double *imu){
     dqi0 = 0.0;
   //unknown why ds is in this function. might have to do with nonuniform grids
   return(ds*dqi0); 
+}
+
+
+double gaussian(double x_0, double y_0,double x,double y){
+  // set standard deviation to 1.0
+  double sigma = 0.25;
+  double kernel, s = 2.0 * sigma * sigma;
+  // sum is for normalization
+  double sum = 0.0; 
+
+  kernel= exp(-1/s*((x_0 -x)*(x_0 -x) + (y_0 -y)*(y_0 -y)));
+ 
+  // normalize the Kernel
+  kernel /= sqrt(2*M_PI)*sigma;
+  return(kernel);
 }
