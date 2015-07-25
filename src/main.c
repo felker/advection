@@ -9,7 +9,7 @@
 #define AUTO_TIMESTEP 1 //flag for automatically setting dt such that max{cfl_array} = CFL
 #define CFL 0.8 //if set to 1.0, 1D constant advection along grid is exact. 
 #define OUTPUT_INTERVAL 1 //how many timesteps to dump simulation data. 0 for only last step, 1 for every step
-#undef SECOND_ORDER //flag to turn on van Leer flux limiting
+#define SECOND_ORDER //flag to turn on van Leer flux limiting
 
 //select problem (mutually exclusive)
 #undef RADIAL_INWARD
@@ -46,8 +46,8 @@ int main(int argc, char **argv){
   double dt =0.01;
   
   /* Computational (2D polar) grid coordinates */
-  int nx1 = 200;
-  int nx2 = 200;
+  int nx1 = 400;
+  int nx2 = 400;
 
   //number of ghost cells on both sides of each dimension
   //only need 1 for piecewise constant method
@@ -499,8 +499,8 @@ int main(int argc, char **argv){
 	    printf("Q0 = %lf Q1= %lf Q2 = %lf\n",qmu[0],qmu[1],qmu[2]); } */
 	}
 	//G^H_{i,j+1/2}
-	//net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j+1])/(kappa[i][j]*dx2))*fabs(V[i][j+1])*flux_limiter/2);
-	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j+1])/(dx2))*fabs(V[i][j+1])*flux_limiter/2);
+	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j+1])/(kappa[i][j]*dx2))*fabs(V[i][j+1])*flux_limiter/2);
+	//net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j+1])/(dx2))*fabs(V[i][j+1])*flux_limiter/2);
 	if (V[i][j] > 0.0){
 	  qmu[0] = Q[i][j-2];  //points to the two preceeding bins; 
 	  qmu[1] = Q[i][j-1];  
@@ -514,8 +514,8 @@ int main(int argc, char **argv){
 	  flux_limiter= flux_PLM(dx2,qmu);
 	}
 	//G^H_{i,j-1/2}
-	//net_fluctuation[i][j] -= dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j])/(kappa[i][j]*dx2))*fabs(V[i][j])*flux_limiter/2);
-	net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j])/(dx2))*fabs(V[i][j])*flux_limiter/2);
+	net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j])/(kappa[i][j]*dx2))*fabs(V[i][j])*flux_limiter/2);
+	//net_fluctuation[i][j] += dt/(kappa[i][j]*dx2)*((1-dt*fabs(V[i][j])/(dx2))*fabs(V[i][j])*flux_limiter/2);
 #endif
       }
     }
