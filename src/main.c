@@ -4,10 +4,21 @@
 #include <assert.h>
 #include "visit_writer.h"
 
+//select solver options
 #define X2_PERIODIC 1 //flag to wrap phi coordinate and automatically mesh entire circle
-#define AUTO_TIMESTEP 1 //flag for automatically setting dt such that max{CFL} = 1
-#define OUTPUT_INTERVAL 1 //how many timesteps to dump simulation data. 0 for only last step, 1 for every step
-#undef SECOND_ORDER //flag to turn on van Leer flux limiting
+#define AUTO_TIMESTEP 1 //flag for automatically setting dt such that max{cfl_array} = CFL
+#define CFL 0.8 //if set to 1.0, 1D constant advection along grid is exact. 
+#define OUTPUT_INTERVAL 0 //how many timesteps to dump simulation data. 0 for only last step, 1 for every step
+#define SECOND_ORDER //flag to turn on van Leer flux limiting
+
+//select problem (mutually exclusive)
+#undef RADIAL_INWARD
+#define SEMI_CLOCK
+#undef HORIZONTAL
+
+#ifdef SEMI_CLOCK
+#define X2_PERIODIC 0
+#endif
 
 double stream_function(double x, double y);
 double X_physical(double, double);
@@ -15,6 +26,7 @@ double Y_physical(double, double);
 void vector_coordinate_to_physical(double vr, double vphi, double phi, double *vx, double *vy);
 void vector_physical_to_coordinate(double vx, double vy, double phi, double *vr, double *vphi);
 void velocity_physical(double x_b,double y_b,double *vx,double *vy);
+void velocity_coordinate(double r_b,double phi_b,double *vr,double *vphi);
 double initial_condition(double x, double y);
 double bc_x1i(double x, double y);
 double bc_x1f(double x, double y,double t);
@@ -27,12 +39,12 @@ float sum(float a[], int n);
 
 int main(int argc, char **argv){
   int i,j,k,n; 
-  int nsteps=50;
+  int nsteps=150;
   double dt =0.01;
   
   /* Computational (2D polar) grid coordinates */
-  int nx1 = 50;
-  int nx2 = 50;
+  int nx1 = 400;
+  int nx2 = 400;
 
   //number of ghost cells on both sides of each dimension
   //only need 1 for piecewise constant method
@@ -60,7 +72,7 @@ int main(int argc, char **argv){
   /*another convention: when the phi coordinate is periodic, do we repeat the boundary mesh points? yes for now */
 
   double lx1 = 2.0;//these values are inclusive [x1_i, x1_f]
-  double lx2 = M_PI/2.0;
+  double lx2 = M_PI;
   double x1_i = 0.5;
   double x2_i = 0.0;
 
@@ -76,7 +88,7 @@ int main(int argc, char **argv){
   double dx1 = lx1/(nx1_r-1);   
   double x1_f = x1_i + lx1;
 
-  //  printf("dx1=%lf dx2=%lf \n",dx1,dx2); 
+  printf("dx1=%lf dx2=%lf \n",dx1,dx2); 
   
   /*Cell centered (zonal) values of computational coordinate position */
   double *x1 = (double *) malloc(sizeof(double)*nx1); 
@@ -161,23 +173,7 @@ int main(int argc, char **argv){
     }
     kappa[i][je] = (x1[i]+dx1)*dx1*dx2/(dx1*dx2); 
   }
-  
-  
-  /* Stream function */ //probably dont need this array
-  //this variable is cell centered stream 
-  double **stream;
-  double *datastream;
-  stream = (double **) malloc(sizeof(double *)*nx1);
-  datastream = (double *) malloc(sizeof(double)*nx1*nx2);
-  for(i=0; i<nx1; i++){
-    stream[i] = &(datastream[nx2*i]);
-  }
-  for(i=is; i<ie; i++){
-    for(j=js; j<je; j++){
-      stream[i][j] = stream_function(x[i][j],y[i][j]);
-    }
-  }
-
+ 
   /*Average normal edge velocities */
   //now we move from cell centered quantities to edge quantities 
   //the convention in this code is that index i refers to i-1/2 edge
@@ -193,7 +189,22 @@ int main(int argc, char **argv){
   }
   
   /*Option #1 for computing edge velocities: path integral of Cartesian stream function */
-  /*  for(i=is; i<ie; i++){
+ /* Stream function */ //probably dont need this array
+  //this variable is cell centered stream 
+  /* double **stream;
+  double *datastream;
+  stream = (double **) malloc(sizeof(double *)*nx1);
+  datastream = (double *) malloc(sizeof(double)*nx1*nx2);
+  for(i=0; i<nx1; i++){
+    stream[i] = &(datastream[nx2*i]);
+  }
+  for(i=is; i<ie; i++){
+    for(j=js; j<je; j++){
+      stream[i][j] = stream_function(x[i][j],y[i][j]);
+    }
+  }
+ 
+   for(i=is; i<ie; i++){
     for(j=js; j<je; j++){ //go an additional step to capture nx2_r+1/2
       //average the corner stream functions
       U[i][j]= (stream_function(X_physical(x1[i]-dx1/2,x2[j]+dx2/2),Y_physical(x1[i]-dx1/2,x2[j]+dx2/2)) - 
@@ -218,22 +229,29 @@ int main(int argc, char **argv){
   } 
   */
   double ux,vy,temp; 
-  /*Option #2: directly specify velocity in Cartesian coordinate basis as a function of cartesian position*/   
   for(i=is; i<=ie; i++){
     for(j=js; j<=je; j++){ 
+      /*Option #2: directly specify velocity in Cartesian coordinate basis as a function of cartesian position*/   
+      
       //radial face i-1/2
       velocity_physical(X_physical(x1_b[i],x2_b[j]+dx2/2),Y_physical(x1_b[i],x2_b[j]+dx2/2),&ux,&vy);
       // Average normal edge velocity: just transform face center velocity to local orthonormal basis? 
       vector_physical_to_coordinate(ux,vy,x2_b[j]+dx2/2,&U[i][j],&temp); 
       
+#ifdef HORIZONTAL
       //EXACT SOLUTION FOR EDGE VELOCITY FOR HORIZONTAL FLOW
       //      printf("U_before = %lf\n",U[i][j]);
-      //      U[i][j] = (sin(x2_b[j]+dx2) - sin(x2_b[j]))/(dx2); 
+      U[i][j] = (sin(x2_b[j]+dx2) - sin(x2_b[j]))/(dx2); 
       //      printf("U_after = %lf\n",U[i][j]);
+#endif
 
       //phi face j-1/2
       velocity_physical(X_physical(x1_b[i]+dx1/2,x2_b[j]),Y_physical(x1_b[i]+dx1/2,x2_b[j]),&ux,&vy);
       vector_physical_to_coordinate(ux,vy,x2_b[j],&temp,&V[i][j]); 
+#ifdef SEMI_CLOCK
+      velocity_coordinate(x1_b[i],x2_b[j],&U[i][j],&V[i][j]);
+#endif
+      //      printf("U,V = %lf,%lf\n",U[i][j],V[i][j]);
     }
   } 
 
@@ -257,37 +275,42 @@ int main(int argc, char **argv){
 
 
   /*Check CFL condition, reset timestep */
-  float **cfl;
+  float **cfl_array;
   float *dataCFL;
-  cfl = (float **) malloc(sizeof(float *)*nx1);
+  cfl_array = (float **) malloc(sizeof(float *)*nx1);
   dataCFL = (float *) malloc(sizeof(float)*nx1*nx2);
   for(i=0; i<nx1; i++){
-    cfl[i] = &(dataCFL[nx2*i]);
+    cfl_array[i] = &(dataCFL[nx2*i]);
   }
   for(i=1; i<nx1; i++){
     for(j=1; j<nx2; j++){ //based on edge velocities or cell centered u,v?
       if (i >=is && i< ie && j >=js && j <je)
-	cfl[i][j] = fabs(U[i][j])*dt/dx1 + fabs(V[i][j])*dt/dx2;
+	cfl_array[i][j] = fabs(U[i][j])*dt/dx1 + fabs(V[i][j])*dt/(x1_b[i]*dx2); //use boundary radius
       else
-	cfl[i][j] =0.0; 
+	cfl_array[i][j] =0.0; 
     }
   }
   //find maximum CFL value in domain
-  float  max_CFL = find_max(dataCFL,nx1*nx2); 
-  printf("Largest CFL number = %lf\n",max_CFL); 
-  if (max_CFL > 1.0 || AUTO_TIMESTEP){//reset timestep if needed
-    dt = dt/max_CFL; 
+  float  max_cfl = find_max(dataCFL,nx1*nx2); 
+  printf("Largest CFL number = %lf\n",max_cfl); 
+  if (max_cfl > CFL || AUTO_TIMESTEP){//reset timestep if needed
+    dt = CFL*dt/max_cfl; 
     for(i=1; i<nx1; i++){
       for(j=1; j<nx2; j++){ 
 	if (i >=is && i< ie && j >=js && j <je)
-	  cfl[i][j] = fabs(U[i][j])*dt/dx1 + fabs(V[i][j])*dt/dx2;
+	  cfl_array[i][j] = fabs(U[i][j])*dt/dx1 + fabs(V[i][j])*dt/(x1_b[i]*dx2);
 	else
-	  cfl[i][j] =0.0; 
+	  cfl_array[i][j] =0.0; 
       }
     } 
   }
-  max_CFL = find_max(dataCFL,nx1*nx2); 
-  printf("Largest CFL number = %lf\n",max_CFL); 
+  max_cfl = find_max(dataCFL,nx1*nx2); 
+  printf("Largest CFL number = %lf\n",max_cfl); 
+  
+#ifdef SEMI_CLOCK
+  nsteps = M_PI/dt;
+  printf("nsteps = %d, dt = %lf, t_final = %lf\n",nsteps,dt,nsteps*dt);
+#endif
 
   /*Conserved variable on the computational coordinate mesh*/
   double **Q;
@@ -385,10 +408,6 @@ int main(int argc, char **argv){
 	}
       }
     }
-    /*    for (i=ie; i<nx1; i++)
-      for (j=0; j<nx2; j++){
-	printf("Q[%d][%d] = %lf\n",i,j,Q[i][j]);
-    }*/
 
     double flux_limiter =0.0; 
     double *qmu = (double *) malloc(sizeof(double)*3); //manually copy array for computing slope limiters
@@ -420,7 +439,9 @@ int main(int argc, char **argv){
 	    printf("Q0 = %lf Q1= %lf Q2 = %lf\n",qmu[0],qmu[1],qmu[2]); } */
 	}
 	//F^H_{i+1/2,j}
-	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(1-dt*fabs(U[i+1][j])/(dx1))*fabs(U[i+1][j])*flux_limiter/2);
+	//	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(1-dt*fabs(U[i+1][j])/(dx1))*fabs(U[i+1][j])*flux_limiter/2);
+	//	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*((kappa[i][j]/x1_b[i+1]-dt*fabs(U[i+1][j])/(x1_b[i+1]*dx1))*fabs(U[i+1][j])*flux_limiter/2);
+	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i+1]*(kappa[i][j]/x1_b[i+1]-dt*fabs(U[i+1][j])/(x1_b[i+1]*dx1))*fabs(U[i+1][j])*flux_limiter/2);
 	if (U[i][j] > 0.0){
 	  qmu[0] = Q[i-2][j];  //points to the two preceeding bins; 
 	  qmu[1] = Q[i-1][j];  
@@ -434,9 +455,10 @@ int main(int argc, char **argv){
 	  flux_limiter= flux_PLM(dx1,qmu);
 	}
 	//F^H_{i-1/2,j}
-	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*(x1_b[i]*(1-dt*fabs(U[i][j])/(dx1))*fabs(U[i][j])*flux_limiter/2);
+	//	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*(x1_b[i]*(1-dt*fabs(U[i][j])/(dx1))*fabs(U[i][j])*flux_limiter/2);
+	//	net_fluctuation[i][j] += dt/(kappa[i][j]*dx1)*((kappa[i-1][j]/x1_b[i]-dt*fabs(U[i][j])/(x1_b[i]*dx1))*fabs(U[i][j])*flux_limiter/2);
+	net_fluctuation[i][j] -= dt/(kappa[i][j]*dx1)*(x1_b[i]*(kappa[i-1][j]/x1_b[i]-dt*fabs(U[i][j])/(x1_b[i]*dx1))*fabs(U[i][j])*flux_limiter/2);
 #endif
-	printf("flux limiter = %lf, U[i] = %lf, U[i+1] = %lf\n",flux_limiter,U[i][j],U[i+1][j]);
 	/* Second coordinate */
 	V_plus = fmax(V[i][j],0.0); // max{V_{i,j-1/2},0.0} LHS boundary
 	V_minus = fmin(V[i][j+1],0.0); // min{V_{i,j+1/2},0.0} RHS boundary
@@ -557,19 +579,26 @@ double bc_x1i(double x, double y){
 }
 //bc at outermost radius
 double bc_x1f(double x, double y, double t){
-  //  if ((x<-1.5) && (x>=-2.0) && (y>1.5) && (y<=2.0)){
+#ifdef HORIZONTAL
+  if ((x<-1.5) && (x>=-2.0) && (y>1.5) && (y<=2.0)){
     return(1.0);
-    //}
-    //  return(0.0);
+  }
+#endif
+#ifdef RADIAL_INWARD
+    return(1.0);
+#endif
+  return(0.0);
 }
 //bc at phi=0.0
 double bc_x2i(double x, double y){
   return(0.0);
 }
-//bc at phi=pi/2 (upper part of circle quadrant)
+//bc at phi_final
 double bc_x2f(double x, double y){
-  //  if ((y > 1.0) && (y < 1.5))
-  //return(1.0);
+#ifdef SEMI_CLOCK
+  //  if (x <= -1.0 && x>= -2.0)
+    return(1.0);
+#endif
   return(0.0);
 }
 
@@ -626,17 +655,28 @@ void vector_physical_to_coordinate(double vx, double vy, double phi, double *vr,
 }
 /* VELOCITY OPTIONS: PICK ONLY ONE */
 void velocity_physical(double x_b,double y_b,double *vx,double *vy){
-  //  *vx=1.0;
-  //  *vy=0.0;
+#ifdef HORIZONTAL
+  *vx=1.0;
+  *vy=0.0;
+#endif
+ 
+#ifdef RADIAL_INWARD
   double angle = atan2(y_b,x_b); 
   *vx = -cos(angle);
   *vy = -sin(angle);
+#endif
 
   //these produce nonuniform radial velocities-- why do we get uniform scaled edge velocities with atan2(y,x) in stream function?
   //bc the act of differencing to get proper velocity requires discrete divergence free condition
   /*  *vx = -x_b/(x_b*x_b + y_b*y_b);
    *vy = -y_b/(x_b*x_b + y_b*y_b);*/
   return; 
+}
+
+void velocity_coordinate(double r_b,double phi_b,double *vr,double *vphi){
+  *vr =0.0;
+  *vphi = -1.0;
+  return;
 }
 
 /*Stream function in physical coordinates */
